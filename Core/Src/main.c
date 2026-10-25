@@ -24,7 +24,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "airmouse.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -93,8 +93,7 @@ int main(void) {
   MX_I2C1_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
-  i2c_status = HAL_I2C_Mem_Read(&hi2c1, 0x68 << 1, 0x75, I2C_MEMADD_SIZE_8BIT,
-                                (uint8_t *)&who_am_i, 1, 100);
+  airmouse_init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -103,8 +102,7 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
-    HAL_Delay((who_am_i == 0x68 || who_am_i == 0x70) ? 100 : 1000);
+    airmouse_step();
   }
   /* USER CODE END 3 */
 }
