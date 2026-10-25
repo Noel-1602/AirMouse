@@ -30,6 +30,12 @@ extern "C" {
 /* Button debounce time in ms */
 #define BUTTON_DEBOUNCE_MS 20
 
+/* Output mode: 1 = HC-05 Wireless UART, 0 = USB HID */
+#define OUTPUT_MODE_WIRELESS 1
+
+/* Wireless packet transmission period in ms */
+#define PACKET_PERIOD_MS 20
+
 /* Global debug struct for GDB inspection */
 typedef struct {
   int16_t gx_raw;

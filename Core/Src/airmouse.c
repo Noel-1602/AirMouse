@@ -1,4 +1,5 @@
 #include "airmouse.h"
+#include "hc05.h"
 #include "i2c.h"
 #include "usb_device.h"
 #include "usbd_hid.h"
@@ -184,6 +185,10 @@ int airmouse_init(void) {
     btn_recenter.prev_state = recenter_raw;
     btn_recenter.last_change_tick = now;
 
+#if OUTPUT_MODE_WIRELESS
+    hc05_init();
+#endif
+
     return 0;
 }
 
@@ -308,6 +313,14 @@ void airmouse_step(void) {
     }
     g_airmouse_debug.buttons = buttons;
 
+#if OUTPUT_MODE_WIRELESS
+    /* Wireless (HC-05 UART) mode: Send 5-byte packet every PACKET_PERIOD_MS (20 ms) */
+    static uint32_t last_packet_tick = 0;
+    if ((now - last_packet_tick) >= PACKET_PERIOD_MS) {
+        last_packet_tick = now;
+        hc05_send_mouse(out_dx, out_dy, buttons);
+    }
+#else
     /* Send 4-byte report {buttons, dx, dy, 0} only if configured */
     if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
         static uint8_t report[4];
@@ -317,4 +330,5 @@ void airmouse_step(void) {
         report[3] = 0;
         USBD_HID_SendReport(&hUsbDeviceFS, report, sizeof(report));
     }
+#endif
 }
