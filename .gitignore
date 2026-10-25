@@ -1,0 +1,62 @@
+# Build output
+build/
+bin/
+obj/
+out/
+
+# Compiled object and dependency files
+*.o
+*.obj
+*.su
+*.d
+
+# Linker map and firmware binaries
+*.elf
+*.hex
+*.bin
+*.map
+*.axf
+
+# CMake generated files (outside build/ if any)
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Makefile
+
+# STM32CubeIDE / Eclipse metadata (if opened in Eclipse/STM32CubeIDE)
+.metadata/
+.settings/
+.loadpath
+.project
+.cproject
+
+# IDEs and Editors
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*~
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
