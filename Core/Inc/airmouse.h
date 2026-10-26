@@ -30,11 +30,22 @@ extern "C" {
 /* Button debounce time in ms */
 #define BUTTON_DEBOUNCE_MS 20
 
-/* Output mode: 1 = HC-05 Wireless UART, 0 = USB HID */
+/* Auto-detect mode at startup: 1 = auto-detect USB vs Wireless, 0 = use OUTPUT_MODE_WIRELESS */
+#define AUTO_DETECT_MODE 1
+
+/* Output mode: 1 = HC-05 Wireless UART, 0 = USB HID (used if AUTO_DETECT_MODE is 0) */
 #define OUTPUT_MODE_WIRELESS 1
 
 /* Wireless packet transmission period in ms */
 #define PACKET_PERIOD_MS 20
+
+/* Output mode enum */
+typedef enum output_mode_t {
+  MODE_USB_HID = 0,
+  MODE_WIRELESS = 1
+} output_mode_t;
+
+extern output_mode_t g_output_mode;
 
 /* Global debug struct for GDB inspection */
 typedef struct {
@@ -48,6 +59,7 @@ typedef struct {
   int8_t dy;
   uint8_t buttons;
   uint8_t enabled;
+  output_mode_t g_output_mode;
 } airmouse_debug_t;
 
 extern volatile airmouse_debug_t g_airmouse_debug;

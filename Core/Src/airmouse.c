@@ -17,6 +17,9 @@
 /* Global debug struct for GDB inspection */
 volatile airmouse_debug_t g_airmouse_debug = {0};
 
+/* Runtime output mode */
+output_mode_t g_output_mode = OUTPUT_MODE_WIRELESS ? MODE_WIRELESS : MODE_USB_HID;
+
 /* USB Device handle */
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
@@ -40,12 +43,50 @@ static float rem_x = 0.0f;
 static float rem_y = 0.0f;
 static uint32_t last_step_tick = 0;
 
+/* Non-blocking LED feedback state machine (PC13 active-low) */
+#define BLINK_HALF_PERIOD_MS 100
+
+static uint8_t s_blink_active = 0;
+static uint8_t s_blink_phase = 0;
+static uint8_t s_blink_total_phases = 0;
+static uint32_t s_blink_phase_start = 0;
+static uint8_t s_usb_seen_configured = 0;
+
 /* Helper: Active-low LED control on PC13 */
 static inline void set_led(uint8_t on) {
     if (on) {
         HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET); /* LED ON */
     } else {
         HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);   /* LED OFF */
+    }
+}
+
+/* Helper: Start non-blocking LED feedback for mode switch */
+static void start_mode_switch_led_feedback(output_mode_t mode) {
+    s_blink_active = 1;
+    s_blink_phase = 0;
+    /* 3 short blinks for USB HID (6 phases), 2 short blinks for Wireless (4 phases) */
+    s_blink_total_phases = (mode == MODE_USB_HID) ? 6 : 4;
+    s_blink_phase_start = HAL_GetTick();
+    set_led(1);
+}
+
+/* Helper: Update non-blocking LED state or maintain normal LED behaviour */
+static void update_led(uint32_t now) {
+    if (s_blink_active) {
+        if ((now - s_blink_phase_start) >= BLINK_HALF_PERIOD_MS) {
+            s_blink_phase++;
+            s_blink_phase_start = now;
+            if (s_blink_phase >= s_blink_total_phases) {
+                s_blink_active = 0;
+                set_led(g_airmouse_debug.enabled);
+            } else {
+                /* Even phase = ON, Odd phase = OFF */
+                set_led((s_blink_phase % 2) == 0);
+            }
+        }
+    } else {
+        set_led(g_airmouse_debug.enabled);
     }
 }
 
@@ -86,6 +127,10 @@ static void airmouse_calibrate(void) {
         /* Blink fast: toggle every 25 samples (~50 ms) */
         if ((i % 25) == 0) {
             HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+        }
+
+        if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
+            s_usb_seen_configured = 1;
         }
 
         if (HAL_I2C_Mem_Read(&hi2c1, MPU6050_I2C_ADDR, MPU6050_REG_ACCEL_XOUT_H,
@@ -162,6 +207,30 @@ int airmouse_init(void) {
     g_airmouse_debug.enabled = 0;
     set_led(0); /* LED off = movement disabled */
 
+#if AUTO_DETECT_MODE
+    /*
+     * Boot: wait up to 1500 ms after startup.
+     * Gyro calibration ran during this window without blocking USB enumeration.
+     * If USB is CONFIGURED at any point in the 1500 ms window, start in MODE_USB_HID.
+     * Otherwise start in MODE_WIRELESS.
+     */
+    while (HAL_GetTick() < 1500) {
+        if (s_usb_seen_configured || (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED)) {
+            s_usb_seen_configured = 1;
+            break;
+        }
+    }
+    if (s_usb_seen_configured || (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED)) {
+        g_output_mode = MODE_USB_HID;
+    } else {
+        g_output_mode = MODE_WIRELESS;
+    }
+#else
+    g_output_mode = (OUTPUT_MODE_WIRELESS != 0) ? MODE_WIRELESS : MODE_USB_HID;
+#endif
+
+    g_airmouse_debug.g_output_mode = g_output_mode;
+
     /* Initialize button states */
     uint32_t now = HAL_GetTick();
     last_step_tick = now;
@@ -185,9 +254,8 @@ int airmouse_init(void) {
     btn_recenter.prev_state = recenter_raw;
     btn_recenter.last_change_tick = now;
 
-#if OUTPUT_MODE_WIRELESS
+    /* Always call hc05_init() at startup (USART2 must be ready in both modes) */
     hc05_init();
-#endif
 
     return 0;
 }
@@ -208,28 +276,69 @@ void airmouse_step(void) {
     update_button(&btn_right, right_raw, now);
     update_button(&btn_recenter, recenter_raw, now);
 
-    /* Detect rising edge of debounced pressed state (recenter press) */
+    static uint32_t recenter_press_start_tick = 0;
+
+    /* Detect press and release edges of debounced B14 */
     uint8_t recenter_press_edge = (btn_recenter.debounced_state && !btn_recenter.prev_state);
+    uint8_t recenter_release_edge = (!btn_recenter.debounced_state && btn_recenter.prev_state);
     btn_recenter.prev_state = btn_recenter.debounced_state;
 
     if (recenter_press_edge) {
-        /* Recalibrate gyro and fast-blink LED */
-        airmouse_calibrate();
+        recenter_press_start_tick = now;
+    }
 
-        /* Toggle movement enabled state */
-        g_airmouse_debug.enabled = !g_airmouse_debug.enabled;
-        set_led(g_airmouse_debug.enabled);
+    if (recenter_release_edge) {
+        uint32_t hold_duration = now - recenter_press_start_tick;
 
-        /* Resync buttons and timer after calibration */
-        now = HAL_GetTick();
-        last_step_tick = now;
+        if (hold_duration < 800) {
+            /* Short press (< 800 ms): existing behaviour (recentre, recalibrate bias, toggle enabled) */
+            s_blink_active = 0; /* cancel any active mode blink */
+            airmouse_calibrate();
 
-        recenter_raw = (HAL_GPIO_ReadPin(BTN_RECENTER_GPIO_Port, BTN_RECENTER_Pin) == GPIO_PIN_RESET) ? 1 : 0;
-        btn_recenter.raw_state = recenter_raw;
-        btn_recenter.debounced_state = recenter_raw;
-        btn_recenter.prev_state = recenter_raw;
-        btn_recenter.last_change_tick = now;
-        return;
+            /* Toggle movement enabled state */
+            g_airmouse_debug.enabled = !g_airmouse_debug.enabled;
+            set_led(g_airmouse_debug.enabled);
+
+            /* Resync buttons and timer after calibration */
+            now = HAL_GetTick();
+            last_step_tick = now;
+
+            recenter_raw = (HAL_GPIO_ReadPin(BTN_RECENTER_GPIO_Port, BTN_RECENTER_Pin) == GPIO_PIN_RESET) ? 1 : 0;
+            btn_recenter.raw_state = recenter_raw;
+            btn_recenter.debounced_state = recenter_raw;
+            btn_recenter.prev_state = recenter_raw;
+            btn_recenter.last_change_tick = now;
+            return;
+        } else if (hold_duration >= 1500) {
+            /* Long press (>= 1500 ms): toggle g_output_mode, do NOT recentre or recalibrate */
+            if (g_output_mode == MODE_USB_HID) {
+                g_output_mode = MODE_WIRELESS;
+            } else {
+                g_output_mode = MODE_USB_HID;
+            }
+            g_airmouse_debug.g_output_mode = g_output_mode;
+
+            /* Force cursor movement to disabled (enabled = 0) and zero dx/dy so it cannot jump */
+            g_airmouse_debug.enabled = 0;
+            rem_x = 0.0f;
+            rem_y = 0.0f;
+            filt_gx = 0.0f;
+            filt_gy = 0.0f;
+            filt_gz = 0.0f;
+            g_airmouse_debug.dx = 0;
+            g_airmouse_debug.dy = 0;
+
+            /* Non-blocking LED feedback for the new mode: 3 short blinks = USB, 2 short blinks = wireless */
+            start_mode_switch_led_feedback(g_output_mode);
+
+            /* Resync timer and return without jumping */
+            now = HAL_GetTick();
+            last_step_tick = now;
+            update_led(now);
+            return;
+        } else {
+            /* Held 800 to 1500 ms: ignore */
+        }
     }
 
     /* 2. Burst-read 14 bytes from MPU6050 (0x3B) */
@@ -302,6 +411,7 @@ void airmouse_step(void) {
 
     g_airmouse_debug.dx = out_dx;
     g_airmouse_debug.dy = out_dy;
+    g_airmouse_debug.g_output_mode = g_output_mode;
 
     /* Left and right buttons (active even if movement disabled) */
     uint8_t buttons = 0;
@@ -313,22 +423,25 @@ void airmouse_step(void) {
     }
     g_airmouse_debug.buttons = buttons;
 
-#if OUTPUT_MODE_WIRELESS
-    /* Wireless (HC-05 UART) mode: Send 5-byte packet every PACKET_PERIOD_MS (20 ms) */
-    static uint32_t last_packet_tick = 0;
-    if ((now - last_packet_tick) >= PACKET_PERIOD_MS) {
-        last_packet_tick = now;
-        hc05_send_mouse(out_dx, out_dy, buttons);
+    if (g_output_mode == MODE_USB_HID) {
+        /* Send 4-byte report {buttons, dx, dy, 0} only if USB is CONFIGURED */
+        if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
+            static uint8_t report[4];
+            report[0] = buttons;
+            report[1] = (uint8_t)out_dx;
+            report[2] = (uint8_t)out_dy;
+            report[3] = 0;
+            USBD_HID_SendReport(&hUsbDeviceFS, report, sizeof(report));
+        }
+    } else {
+        /* Wireless (HC-05 UART) mode: Send 5-byte packet every PACKET_PERIOD_MS (20 ms) */
+        static uint32_t last_packet_tick = 0;
+        if ((now - last_packet_tick) >= PACKET_PERIOD_MS) {
+            last_packet_tick = now;
+            hc05_send_mouse(out_dx, out_dy, buttons);
+        }
     }
-#else
-    /* Send 4-byte report {buttons, dx, dy, 0} only if configured */
-    if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
-        static uint8_t report[4];
-        report[0] = buttons;
-        report[1] = (uint8_t)out_dx;
-        report[2] = (uint8_t)out_dy;
-        report[3] = 0;
-        USBD_HID_SendReport(&hUsbDeviceFS, report, sizeof(report));
-    }
-#endif
+
+    /* Update non-blocking LED feedback or normal state */
+    update_led(now);
 }
