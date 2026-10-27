@@ -10,7 +10,7 @@ extern "C" {
 /* Feature switches: 1 = on, 0 = off */
 #define TILT_CORRECTION 1
 #define POINTER_ACCEL   1
-#define PRECISION_MODE  1
+#define SCROLL_MODE     1
 #define IDLE_MODE       1
 
 /*
@@ -56,12 +56,16 @@ extern "C" {
 #define TILT_ACC_MAX_G     1.2f   /* Max total acceleration (g) to trust accelerometer */
 
 /* Feature 2: Pointer Acceleration */
-#define ACCEL_GAIN         1.5f   /* Maximum additional acceleration gain multiplier */
+#define ACCEL_GAIN         0.6f   /* Maximum additional acceleration gain multiplier */
 #define ACCEL_REF_DPS      100.0f /* Reference speed for acceleration gain curve (deg/s) */
-#define ACCEL_CAP_DPS      300.0f /* Speed cap for acceleration curve (deg/s) */
+#define ACCEL_CAP_DPS      200.0f /* Speed cap for acceleration curve (deg/s) */
 
-/* Feature 3: Precision Mode */
-#define PRECISION_FACTOR   0.35f  /* Sensitivity multiplier while precision button PB15 is held */
+/* Feature 3: Scroll Mode */
+#define SCROLL_TOGGLE        0      /* 0 = scroll only while B15 is held, 1 = each press toggles scroll on or off */
+#define SCROLL_SENSITIVITY   0.05f  /* Wheel ticks per deg/s per 10 ms step */
+#define SCROLL_SIGN          (1)    /* Sign multiplier (flip if scrolling goes the wrong way) */
+#define SCROLL_DEADZONE_DPS  4.0f   /* Gyro deadzone threshold for scroll input (deg/s) */
+#define SCROLL_MAX_TICKS     3      /* Max scroll ticks per report */
 
 /* Feature 4: Idle Mode (battery saving) */
 #define IDLE_IN_USB_MODE   0      /* Allow idle mode in USB HID mode (1 = yes, 0 = wireless only) */
@@ -94,7 +98,8 @@ typedef struct {
   output_mode_t g_output_mode;
   float roll_deg;
   float accel_gain;
-  uint8_t precision_on;
+  uint8_t scroll_active;
+  int8_t scroll_ticks;
   uint8_t idle;
 } airmouse_debug_t;
 

@@ -38,7 +38,7 @@ typedef struct {
 static button_debounce_t btn_left = {0};
 static button_debounce_t btn_right = {0};
 static button_debounce_t btn_recenter = {0};
-static button_debounce_t btn_precision = {0};
+static button_debounce_t btn_scroll = {0};
 
 /* Filter and accumulator states */
 static float filt_gx = 0.0f;
@@ -46,6 +46,13 @@ static float filt_gy = 0.0f;
 static float filt_gz = 0.0f;
 static float rem_x = 0.0f;
 static float rem_y = 0.0f;
+#if SCROLL_MODE
+static float scroll_acc = 0.0f;
+static uint8_t s_prev_scroll_active = 0;
+#if SCROLL_TOGGLE
+static uint8_t s_scroll_toggle_state = 0;
+#endif
+#endif
 static uint32_t last_step_tick = 0;
 
 /* Feature 1: Tilt correction roll estimate */
@@ -206,6 +213,9 @@ static void airmouse_calibrate(void) {
     filt_gz = 0.0f;
     rem_x = 0.0f;
     rem_y = 0.0f;
+#if SCROLL_MODE
+    scroll_acc = 0.0f;
+#endif
 }
 
 int airmouse_init(void) {
@@ -213,7 +223,7 @@ int airmouse_init(void) {
     uint8_t reg_val = 0;
     HAL_StatusTypeDef status;
 
-    /* Configure PB15 as input with internal pull-up (Precision button) */
+    /* Configure PB15 as input with internal pull-up (Scroll button) */
     __HAL_RCC_GPIOB_CLK_ENABLE();
     GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin = GPIO_PIN_15;
@@ -298,7 +308,7 @@ int airmouse_init(void) {
     uint8_t left_raw = (HAL_GPIO_ReadPin(BTN_LEFT_GPIO_Port, BTN_LEFT_Pin) == GPIO_PIN_RESET) ? 1 : 0;
     uint8_t right_raw = (HAL_GPIO_ReadPin(BTN_RIGHT_GPIO_Port, BTN_RIGHT_Pin) == GPIO_PIN_RESET) ? 1 : 0;
     uint8_t recenter_raw = (HAL_GPIO_ReadPin(BTN_RECENTER_GPIO_Port, BTN_RECENTER_Pin) == GPIO_PIN_RESET) ? 1 : 0;
-    uint8_t precision_raw = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_15) == GPIO_PIN_RESET) ? 1 : 0;
+    uint8_t scroll_raw = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_15) == GPIO_PIN_RESET) ? 1 : 0;
 
     btn_left.raw_state = left_raw;
     btn_left.debounced_state = left_raw;
@@ -315,13 +325,14 @@ int airmouse_init(void) {
     btn_recenter.prev_state = recenter_raw;
     btn_recenter.last_change_tick = now;
 
-    btn_precision.raw_state = precision_raw;
-    btn_precision.debounced_state = precision_raw;
-    btn_precision.prev_state = precision_raw;
-    btn_precision.last_change_tick = now;
+    btn_scroll.raw_state = scroll_raw;
+    btn_scroll.debounced_state = scroll_raw;
+    btn_scroll.prev_state = scroll_raw;
+    btn_scroll.last_change_tick = now;
 
     g_airmouse_debug.accel_gain = 1.0f;
-    g_airmouse_debug.precision_on = 0;
+    g_airmouse_debug.scroll_active = 0;
+    g_airmouse_debug.scroll_ticks = 0;
     g_airmouse_debug.idle = 0;
 
     /* Always call hc05_init() at startup (USART2 must be ready in both modes) */
@@ -353,17 +364,17 @@ void airmouse_step(void) {
     uint8_t left_raw = (HAL_GPIO_ReadPin(BTN_LEFT_GPIO_Port, BTN_LEFT_Pin) == GPIO_PIN_RESET) ? 1 : 0;
     uint8_t right_raw = (HAL_GPIO_ReadPin(BTN_RIGHT_GPIO_Port, BTN_RIGHT_Pin) == GPIO_PIN_RESET) ? 1 : 0;
     uint8_t recenter_raw = (HAL_GPIO_ReadPin(BTN_RECENTER_GPIO_Port, BTN_RECENTER_Pin) == GPIO_PIN_RESET) ? 1 : 0;
-    uint8_t precision_raw = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_15) == GPIO_PIN_RESET) ? 1 : 0;
+    uint8_t scroll_raw = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_15) == GPIO_PIN_RESET) ? 1 : 0;
 
     update_button(&btn_left, left_raw, now);
     update_button(&btn_right, right_raw, now);
     update_button(&btn_recenter, recenter_raw, now);
-    update_button(&btn_precision, precision_raw, now);
+    update_button(&btn_scroll, scroll_raw, now);
 
 #if IDLE_MODE
-    uint8_t any_button_down = (left_raw || right_raw || recenter_raw || precision_raw);
+    uint8_t any_button_down = (left_raw || right_raw || recenter_raw || scroll_raw);
     uint8_t any_button_debounced = (btn_left.debounced_state || btn_right.debounced_state ||
-                                   btn_recenter.debounced_state || btn_precision.debounced_state);
+                                   btn_recenter.debounced_state || btn_scroll.debounced_state);
 
     /* Wake immediately on any button press (including PB15) */
     if (s_idle && (any_button_down || any_button_debounced)) {
@@ -374,6 +385,9 @@ void airmouse_step(void) {
         filt_gz = 0.0f;
         rem_x = 0.0f;
         rem_y = 0.0f;
+#if SCROLL_MODE
+        scroll_acc = 0.0f;
+#endif
         last_activity_tick = now;
         set_led(g_airmouse_debug.enabled);
     }
@@ -397,6 +411,10 @@ void airmouse_step(void) {
             /* Short press (< 800 ms): existing behaviour (recentre, recalibrate bias, toggle enabled) */
             s_blink_active = 0; /* cancel any active mode blink */
             airmouse_calibrate();
+
+#if SCROLL_MODE && SCROLL_TOGGLE
+            s_scroll_toggle_state = 0;
+#endif
 
             /* Toggle movement enabled state */
             g_airmouse_debug.enabled = !g_airmouse_debug.enabled;
@@ -433,6 +451,14 @@ void airmouse_step(void) {
             filt_gz = 0.0f;
             g_airmouse_debug.dx = 0;
             g_airmouse_debug.dy = 0;
+#if SCROLL_MODE
+            scroll_acc = 0.0f;
+            g_airmouse_debug.scroll_active = 0;
+            g_airmouse_debug.scroll_ticks = 0;
+#if SCROLL_TOGGLE
+            s_scroll_toggle_state = 0;
+#endif
+#endif
 
             last_mode_switch_tick = now;
             last_activity_tick = now;
@@ -548,10 +574,9 @@ void airmouse_step(void) {
         g_airmouse_debug.dx = 0;
         g_airmouse_debug.dy = 0;
         g_airmouse_debug.accel_gain = 1.0f;
-#if PRECISION_MODE
-        g_airmouse_debug.precision_on = btn_precision.debounced_state;
-#else
-        g_airmouse_debug.precision_on = 0;
+#if SCROLL_MODE
+        g_airmouse_debug.scroll_active = 0;
+        g_airmouse_debug.scroll_ticks = 0;
 #endif
 
         uint8_t idle_buttons = 0;
@@ -583,37 +608,79 @@ void airmouse_step(void) {
 
     int8_t out_dx = 0;
     int8_t out_dy = 0;
+    int8_t scroll_ticks = 0;
+    uint8_t scroll_active = 0;
 
-#if PRECISION_MODE
-    uint8_t precision_active = btn_precision.debounced_state;
-    g_airmouse_debug.precision_on = precision_active;
+#if SCROLL_MODE
+#if SCROLL_TOGGLE
+    uint8_t scroll_press_edge = (btn_scroll.debounced_state && !btn_scroll.prev_state);
+    btn_scroll.prev_state = btn_scroll.debounced_state;
+    if (scroll_press_edge) {
+        s_scroll_toggle_state = !s_scroll_toggle_state;
+    }
+    scroll_active = s_scroll_toggle_state;
 #else
-    g_airmouse_debug.precision_on = 0;
+    btn_scroll.prev_state = btn_scroll.debounced_state;
+    scroll_active = btn_scroll.debounced_state;
+#endif
+
+    /* Whenever scroll mode starts or stops: clear filter state, remainder accumulators, and scroll_acc */
+    if (scroll_active != s_prev_scroll_active) {
+        filt_gx = 0.0f;
+        filt_gy = 0.0f;
+        filt_gz = 0.0f;
+        rem_x = 0.0f;
+        rem_y = 0.0f;
+        scroll_acc = 0.0f;
+        s_prev_scroll_active = scroll_active;
+
+        /* Suppress cursor motion and scroll ticks on the transition frame */
+        out_dx = 0;
+        out_dy = 0;
+        scroll_ticks = 0;
+    } else if (scroll_active) {
+        /* While scroll is active: the cursor must NOT move (send dx = 0, dy = 0) */
+        out_dx = 0;
+        out_dy = 0;
+        rem_x = 0.0f;
+        rem_y = 0.0f;
+
+        /*
+         * Use the vertical pointing axis (the one already used for dy,
+         * after bias removal, tilt correction and the dead zone, before pointer acceleration)
+         * as the scroll input.
+         */
+        float y_dps = (float)(Y_SIGN) * (Y_SOURCE);
+        if (fabsf(y_dps) >= SCROLL_DEADZONE_DPS) {
+            scroll_acc += y_dps * SCROLL_SENSITIVITY * (float)(SCROLL_SIGN);
+        }
+
+        int32_t step_ticks = (int32_t)scroll_acc;
+        scroll_acc -= (float)step_ticks;
+
+        if (step_ticks > SCROLL_MAX_TICKS) {
+            step_ticks = SCROLL_MAX_TICKS;
+        } else if (step_ticks < -SCROLL_MAX_TICKS) {
+            step_ticks = -SCROLL_MAX_TICKS;
+        }
+        scroll_ticks = (int8_t)step_ticks;
+    }
+#else
+    btn_scroll.prev_state = btn_scroll.debounced_state;
 #endif
 
     float gain = 1.0f;
 
-    if (g_airmouse_debug.enabled) {
+    if (!scroll_active && g_airmouse_debug.enabled) {
         float raw_x = (float)(X_SIGN) * (X_SOURCE);
         float raw_y = (float)(Y_SIGN) * (Y_SOURCE);
 
         float sens = SENSITIVITY;
-#if PRECISION_MODE
-        if (precision_active) {
-            sens *= PRECISION_FACTOR;
-        }
-#endif
 
 #if POINTER_ACCEL
-#if PRECISION_MODE
-        if (!precision_active) {
-#endif
-            float speed = sqrtf(raw_x * raw_x + raw_y * raw_y);
-            float capped_speed = (speed > ACCEL_CAP_DPS) ? ACCEL_CAP_DPS : speed;
-            gain = 1.0f + (ACCEL_GAIN * capped_speed / ACCEL_REF_DPS);
-#if PRECISION_MODE
-        }
-#endif
+        float speed = sqrtf(raw_x * raw_x + raw_y * raw_y);
+        float capped_speed = (speed > ACCEL_CAP_DPS) ? ACCEL_CAP_DPS : speed;
+        gain = 1.0f + (ACCEL_GAIN * capped_speed / ACCEL_REF_DPS);
 #endif
 
         g_airmouse_debug.accel_gain = gain;
@@ -638,16 +705,25 @@ void airmouse_step(void) {
 
         out_dx = (int8_t)step_dx;
         out_dy = (int8_t)step_dy;
-    } else {
+    } else if (!scroll_active) {
         rem_x = 0.0f;
         rem_y = 0.0f;
         out_dx = 0;
         out_dy = 0;
         g_airmouse_debug.accel_gain = 1.0f;
+    } else {
+        g_airmouse_debug.accel_gain = 1.0f;
     }
 
     g_airmouse_debug.dx = out_dx;
     g_airmouse_debug.dy = out_dy;
+#if SCROLL_MODE
+    g_airmouse_debug.scroll_active = scroll_active;
+    g_airmouse_debug.scroll_ticks = scroll_ticks;
+#else
+    g_airmouse_debug.scroll_active = 0;
+    g_airmouse_debug.scroll_ticks = 0;
+#endif
     g_airmouse_debug.g_output_mode = g_output_mode;
 
     /* Left and right buttons (active even if movement disabled) */
@@ -658,16 +734,16 @@ void airmouse_step(void) {
     if (btn_right.debounced_state) {
         buttons |= 0x02; /* Right button */
     }
-    g_airmouse_debug.buttons = buttons;
+    g_airmouse_debug.buttons = scroll_active ? (buttons | 0x04) : buttons;
 
     if (g_output_mode == MODE_USB_HID) {
-        /* Send 4-byte report {buttons, dx, dy, 0} only if USB is CONFIGURED */
+        /* Send 4-byte report {buttons, dx, dy, wheel} only if USB is CONFIGURED */
         if (hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED) {
             static uint8_t report[4];
             report[0] = buttons;
             report[1] = (uint8_t)out_dx;
             report[2] = (uint8_t)out_dy;
-            report[3] = 0;
+            report[3] = (uint8_t)scroll_ticks;
             USBD_HID_SendReport(&hUsbDeviceFS, report, sizeof(report));
         }
     } else {
@@ -675,7 +751,15 @@ void airmouse_step(void) {
         static uint32_t last_packet_tick = 0;
         if ((now - last_packet_tick) >= PACKET_PERIOD_MS) {
             last_packet_tick = now;
+#if SCROLL_MODE
+            if (scroll_active) {
+                hc05_send_mouse(0, scroll_ticks, buttons | 0x04);
+            } else {
+                hc05_send_mouse(out_dx, out_dy, buttons);
+            }
+#else
             hc05_send_mouse(out_dx, out_dy, buttons);
+#endif
         }
     }
 
@@ -685,7 +769,7 @@ void airmouse_step(void) {
 #if IDLE_MODE
     /* Idle mode entry detection */
     int idle_allowed = (g_output_mode == MODE_WIRELESS) || IDLE_IN_USB_MODE;
-    if (any_button_down || any_button_debounced || out_dx != 0 || out_dy != 0 || gyro_mag >= IDLE_GYRO_DPS) {
+    if (any_button_down || any_button_debounced || out_dx != 0 || out_dy != 0 || scroll_ticks != 0 || gyro_mag >= IDLE_GYRO_DPS) {
         last_activity_tick = now;
     } else if (idle_allowed && ((now - last_mode_switch_tick) >= 2000)) {
         if ((now - last_activity_tick) >= IDLE_TIMEOUT_MS) {
@@ -697,6 +781,9 @@ void airmouse_step(void) {
             filt_gx = 0.0f;
             filt_gy = 0.0f;
             filt_gz = 0.0f;
+#if SCROLL_MODE
+            scroll_acc = 0.0f;
+#endif
             last_idle_packet_tick = now;
         }
     }

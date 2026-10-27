@@ -78,7 +78,7 @@ int hc05_init(void) {
  *         If previous transmission is still busy, skip packet to never block.
  * @param  dx: Horizontal mouse movement (-127 to 127)
  * @param  dy: Vertical mouse movement (-127 to 127)
- * @param  buttons: Button bitmask (bit0 = left, bit1 = right)
+ * @param  buttons: Button bitmask (bit0 = left, bit1 = right, bit2 = scroll mode)
  * @retval 0 on success, -1 if busy (skipped), -2 if transmit error
  */
 int hc05_send_mouse(int8_t dx, int8_t dy, uint8_t buttons) {

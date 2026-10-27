@@ -81,6 +81,17 @@ def parse_arguments() -> argparse.Namespace:
         help="Exponential moving average smoothing factor (0.0 to 0.9, default: 0.0 = off)",
     )
     parser.add_argument(
+        "--scroll-scale",
+        type=float,
+        default=1.0,
+        help="Scroll wheel sensitivity scale factor (default: 1.0)",
+    )
+    parser.add_argument(
+        "--scroll-invert",
+        action="store_true",
+        help="Invert scroll wheel direction",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print decoded packets without moving cursor or clicking buttons",
@@ -117,12 +128,13 @@ def main() -> None:
         sys.exit(1)
 
     print(f"Connecting to HC-05 on {port} at {args.baud} baud...")
+    scroll_info = f", scroll_scale={args.scroll_scale:.2f}" + (", scroll_invert=True" if args.scroll_invert else "")
     if args.dry_run:
         smooth_info = f", smooth={args.smooth:.2f}" if args.smooth > 0 else ""
-        print(f"[DRY-RUN MODE] Packets will be decoded and printed (scale={args.scale:.2f}{smooth_info}), mouse will NOT move.")
+        print(f"[DRY-RUN MODE] Packets will be decoded and printed (scale={args.scale:.2f}{smooth_info}{scroll_info}), mouse will NOT move.")
     else:
         smooth_info = f", smooth={args.smooth:.2f}" if args.smooth > 0 else " (smoothing off)"
-        print(f"[LIVE MODE] Controlling mouse cursor (scale={args.scale:.2f}{smooth_info}).")
+        print(f"[LIVE MODE] Controlling mouse cursor (scale={args.scale:.2f}{smooth_info}{scroll_info}).")
         print("Note: FailSafe is ON. Move mouse to any screen corner to abort.")
 
     try:
@@ -189,7 +201,7 @@ def main() -> None:
             # byte 0: 0xAA (header sync)
             # byte 1: dx (int8)
             # byte 2: dy (int8)
-            # byte 3: buttons (bit0=left, bit1=right)
+            # byte 3: buttons (bit0=left, bit1=right, bit2=scroll)
             # byte 4: XOR of bytes 0..3
             while len(buffer) >= 5:
                 # Seek sync byte 0xAA
@@ -214,58 +226,83 @@ def main() -> None:
                     last_packet_time = time.time()
                     timeout_warned = False
 
-                    # Reset smoothing state when dx = dy = 0 for 5 packets in a row
-                    if dx == 0 and dy == 0:
-                        zero_packet_count += 1
-                        if zero_packet_count >= 5:
-                            s_prev_dx = 0.0
-                            s_prev_dy = 0.0
-                            rem_x = 0.0
-                            rem_y = 0.0
-                    else:
-                        zero_packet_count = 0
-
-                    # Compute smoothed dx and dy
-                    if args.smooth > 0:
-                        s_dx = args.smooth * s_prev_dx + (1.0 - args.smooth) * float(dx)
-                        s_dy = args.smooth * s_prev_dy + (1.0 - args.smooth) * float(dy)
-                        s_prev_dx = s_dx
-                        s_prev_dy = s_dy
-                    else:
-                        s_dx = float(dx)
-                        s_dy = float(dy)
-                        s_prev_dx = s_dx
-                        s_prev_dy = s_dy
-
                     left_pressed = bool(buttons & 0x01)
                     right_pressed = bool(buttons & 0x02)
+                    is_scroll = bool(buttons & 0x04)
 
-                    if args.dry_run:
-                        print(
-                            f"[PACKET] dx: {dx:+4d} | dy: {dy:+4d} | "
-                            f"s_dx: {s_dx:+6.2f} | s_dy: {s_dy:+6.2f} | "
-                            f"Left: {'DOWN' if left_pressed else ' UP '} | "
-                            f"Right: {'DOWN' if right_pressed else ' UP '}"
-                        )
-                    else:
-                        if args.smooth > 0:
-                            # Apply scale and accumulate fractional remainders
-                            total_x = s_dx * args.scale + rem_x
-                            total_y = s_dy * args.scale + rem_y
+                    if is_scroll:
+                        # Reset cursor smoothing state when scroll is active so cursor doesn't jump afterwards
+                        s_prev_dx = 0.0
+                        s_prev_dy = 0.0
+                        rem_x = 0.0
+                        rem_y = 0.0
+                        zero_packet_count = 0
 
-                            step_x = int(total_x)
-                            step_y = int(total_y)
+                        scroll_factor = 1.0 if args.scroll_invert else -1.0
+                        scroll_ticks = dy
+                        scroll_amount = int(round(scroll_ticks * args.scroll_scale * scroll_factor))
 
-                            rem_x = total_x - float(step_x)
-                            rem_y = total_y - float(step_y)
-
-                            if step_x != 0 or step_y != 0:
-                                pyautogui.moveRel(step_x, step_y)
+                        if args.dry_run:
+                            print(
+                                f"[SCROLL] scroll: {scroll_ticks:+4d} ticks | "
+                                f"Left: {'DOWN' if left_pressed else ' UP '} | "
+                                f"Right: {'DOWN' if right_pressed else ' UP '}"
+                            )
                         else:
-                            # With --smooth 0, behaviour is identical to original firmware
-                            if dx != 0 or dy != 0:
-                                pyautogui.moveRel(dx * args.scale, dy * args.scale)
+                            if scroll_amount != 0:
+                                pyautogui.scroll(scroll_amount)
+                    else:
+                        # Reset smoothing state when dx = dy = 0 for 5 packets in a row
+                        if dx == 0 and dy == 0:
+                            zero_packet_count += 1
+                            if zero_packet_count >= 5:
+                                s_prev_dx = 0.0
+                                s_prev_dy = 0.0
+                                rem_x = 0.0
+                                rem_y = 0.0
+                        else:
+                            zero_packet_count = 0
 
+                        # Compute smoothed dx and dy
+                        if args.smooth > 0:
+                            s_dx = args.smooth * s_prev_dx + (1.0 - args.smooth) * float(dx)
+                            s_dy = args.smooth * s_prev_dy + (1.0 - args.smooth) * float(dy)
+                            s_prev_dx = s_dx
+                            s_prev_dy = s_dy
+                        else:
+                            s_dx = float(dx)
+                            s_dy = float(dy)
+                            s_prev_dx = s_dx
+                            s_prev_dy = s_dy
+
+                        if args.dry_run:
+                            print(
+                                f"[PACKET] dx: {dx:+4d} | dy: {dy:+4d} | "
+                                f"s_dx: {s_dx:+6.2f} | s_dy: {s_dy:+6.2f} | "
+                                f"Left: {'DOWN' if left_pressed else ' UP '} | "
+                                f"Right: {'DOWN' if right_pressed else ' UP '}"
+                            )
+                        else:
+                            if args.smooth > 0:
+                                # Apply scale and accumulate fractional remainders
+                                total_x = s_dx * args.scale + rem_x
+                                total_y = s_dy * args.scale + rem_y
+
+                                step_x = int(total_x)
+                                step_y = int(total_y)
+
+                                rem_x = total_x - float(step_x)
+                                rem_y = total_y - float(step_y)
+
+                                if step_x != 0 or step_y != 0:
+                                    pyautogui.moveRel(step_x, step_y)
+                            else:
+                                # With --smooth 0, behaviour is identical to original firmware
+                                if dx != 0 or dy != 0:
+                                    pyautogui.moveRel(dx * args.scale, dy * args.scale)
+
+                    # Button handling works in both normal and scroll modes
+                    if not args.dry_run:
                         # Left button edge detection
                         if left_pressed and not left_down:
                             pyautogui.mouseDown(button="left")
