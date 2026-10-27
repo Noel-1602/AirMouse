@@ -25,6 +25,12 @@ cmake_install.cmake
 compile_commands.json
 CTestTestfile.cmake
 Makefile
+cmake-build-*/
+.ninja_deps
+.ninja_log
+
+# Clang / Language Server
+.cache/
 
 # STM32CubeIDE / Eclipse metadata (if opened in Eclipse/STM32CubeIDE)
 .metadata/
@@ -42,6 +48,8 @@ Makefile
 .idea/
 *.swp
 *~
+*.bak
+.history/
 
 # Operating System files
 .DS_Store
@@ -59,4 +67,7 @@ __pycache__/
 .venv/
 venv/
 env/
+.pytest_cache/
+.mypy_cache/
+
 

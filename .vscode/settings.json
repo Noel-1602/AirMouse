@@ -1,0 +1,6 @@
+{
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}/build/Debug",
+    "--query-driver=/opt/homebrew/bin/arm-none-eabi-*,/Applications/ArmGNUToolchain/**/arm-none-eabi-*"
+  ]
+}
