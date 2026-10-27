@@ -22,7 +22,7 @@ int hc05_init(void);
  * byte 0: 0xAA (sync byte)
  * byte 1: dx (int8_t)
  * byte 2: dy (int8_t)
- * byte 3: button flags (bit0 = left, bit1 = right)
+ * byte 3: button flags (bit0 = left, bit1 = right, bit2 = scroll mode)
  * byte 4: XOR checksum (byte0 ^ byte1 ^ byte2 ^ byte3)
  *
  * Returns:

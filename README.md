@@ -117,14 +117,28 @@ Safety:
     └── requirements.txt          # Python dependencies (hand-written)
 ```
 
-## Build and flash (macOS)
+## Build and flash
 
 Install the required tools: Arm GNU Toolchain (`arm-none-eabi-gcc`), CMake, Ninja, and OpenOCD.
+
+- **macOS** (Homebrew):
+  ```bash
+  brew install cmake ninja openocd
+  brew install --cask gcc-arm-embedded
+  ```
+- **Linux** (Ubuntu / Debian):
+  ```bash
+  sudo apt update && sudo apt install gcc-arm-none-eabi libnewlib-arm-none-eabi cmake ninja-build openocd
+  ```
+- **Windows**:
+  Install CMake, Ninja, OpenOCD, and [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads) (or via `winget install Arm.GnuArmEmbeddedToolchain Kitware.CMake Ninja-build.Ninja openocd`).
 
 Connect your ST-Link V2 programmer to the Blue Pill:
 - ST-Link SWDIO to Blue Pill SWDIO
 - ST-Link SWCLK to Blue Pill SWCLK
 - ST-Link GND to Blue Pill GND
+
+> **Note:** Make sure all required tools are installed and available in your `PATH` before running the build and flash commands.
 
 Run these commands to build and flash the firmware:
 
@@ -133,8 +147,6 @@ cmake --preset Debug
 cmake --build --preset Debug
 openocd -f interface/stlink.cfg -f target/stm32f1x.cfg -c "program build/Debug/Airmouse.elf verify reset exit"
 ```
-
-The same build and flash steps work on Linux and Windows when the tools are installed in your PATH.
 
 ## How to use it
 
