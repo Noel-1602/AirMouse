@@ -6,8 +6,6 @@ A low-cost handheld motion-controlled mouse built with an STM32 Blue Pill and MP
 
 An air mouse lets you move a computer cursor by waving your hand in the air instead of rolling a mouse on a desk. This project uses a gyroscope sensor to read hand motion and convert tilt and rotation into cursor movements.
 
-This system was built as a final-year engineering project by Group10 at College of Engineering Poonjar (APJ Abdul Kalam Technological University). It provides an affordable air mouse solution for under Rs 5,000, supporting both standard USB plug-and-play and wireless Bluetooth serial communication.
-
 ## Features
 
 - USB HID mode: Works as a standard mouse with no special drivers.
