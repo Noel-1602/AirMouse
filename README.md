@@ -216,10 +216,10 @@ You can modify mouse behaviour by editing `#define` values in `Core/Inc/airmouse
 - Bluetooth Classic pairing on macOS can fail on some Mac models.
 - Uses gyroscope data only; no accelerometer-based tilt correction is implemented.
 
-## Outro and support
 
-If you found this project helpful, please give the repository a star.
+## Support
 
-If you encounter any bugs or have questions, feel free to open an issue on GitHub. Contributions, bug fixes, and feature improvements are always welcome through pull requests.
-
+- ⭐ **Star the project**: If this helped you or inspired your own build, consider giving it a star!
+- 🐞 **Questions & issues**: Run into a problem or have a question? Open an issue on GitHub.
+- 🤝 **Contribute**: Pull requests, bug fixes, and feature suggestions are always welcome.
 
