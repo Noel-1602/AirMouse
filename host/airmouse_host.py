@@ -75,6 +75,12 @@ def parse_arguments() -> argparse.Namespace:
         help="Mouse movement sensitivity scale factor (default: 1.0)",
     )
     parser.add_argument(
+        "--smooth",
+        type=float,
+        default=0.0,
+        help="Exponential moving average smoothing factor (0.0 to 0.9, default: 0.0 = off)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print decoded packets without moving cursor or clicking buttons",
@@ -89,6 +95,10 @@ def to_int8(val: int) -> int:
 
 def main() -> None:
     args = parse_arguments()
+
+    if not (0.0 <= args.smooth <= 0.9):
+        print(f"Error: --smooth must be between 0.0 and 0.9 (got {args.smooth})", file=sys.stderr)
+        sys.exit(1)
 
     port = args.port
     if not port:
@@ -108,9 +118,11 @@ def main() -> None:
 
     print(f"Connecting to HC-05 on {port} at {args.baud} baud...")
     if args.dry_run:
-        print("[DRY-RUN MODE] Packets will be decoded and printed, mouse will NOT move.")
+        smooth_info = f", smooth={args.smooth:.2f}" if args.smooth > 0 else ""
+        print(f"[DRY-RUN MODE] Packets will be decoded and printed (scale={args.scale:.2f}{smooth_info}), mouse will NOT move.")
     else:
-        print(f"[LIVE MODE] Controlling mouse cursor (scale={args.scale:.2f}).")
+        smooth_info = f", smooth={args.smooth:.2f}" if args.smooth > 0 else " (smoothing off)"
+        print(f"[LIVE MODE] Controlling mouse cursor (scale={args.scale:.2f}{smooth_info}).")
         print("Note: FailSafe is ON. Move mouse to any screen corner to abort.")
 
     try:
@@ -134,6 +146,13 @@ def main() -> None:
     timeout_warned = False
     buffer = bytearray()
 
+    # Host smoothing & fractional remainder state
+    s_prev_dx = 0.0
+    s_prev_dy = 0.0
+    rem_x = 0.0
+    rem_y = 0.0
+    zero_packet_count = 0
+
     print("Connected. Listening for airmouse packets (Ctrl+C to quit)...")
 
     try:
@@ -146,8 +165,14 @@ def main() -> None:
 
             now = time.time()
 
-            # Timeout check: If no valid packet arrives for 1 second, release buttons and warn once
+            # Timeout check: If no valid packet arrives for 1 second, release buttons, reset smoothing state, and warn once
             if (now - last_packet_time) >= 1.0:
+                s_prev_dx = 0.0
+                s_prev_dy = 0.0
+                rem_x = 0.0
+                rem_y = 0.0
+                zero_packet_count = 0
+
                 if left_down or right_down:
                     if not args.dry_run:
                         if left_down:
@@ -189,19 +214,57 @@ def main() -> None:
                     last_packet_time = time.time()
                     timeout_warned = False
 
+                    # Reset smoothing state when dx = dy = 0 for 5 packets in a row
+                    if dx == 0 and dy == 0:
+                        zero_packet_count += 1
+                        if zero_packet_count >= 5:
+                            s_prev_dx = 0.0
+                            s_prev_dy = 0.0
+                            rem_x = 0.0
+                            rem_y = 0.0
+                    else:
+                        zero_packet_count = 0
+
+                    # Compute smoothed dx and dy
+                    if args.smooth > 0:
+                        s_dx = args.smooth * s_prev_dx + (1.0 - args.smooth) * float(dx)
+                        s_dy = args.smooth * s_prev_dy + (1.0 - args.smooth) * float(dy)
+                        s_prev_dx = s_dx
+                        s_prev_dy = s_dy
+                    else:
+                        s_dx = float(dx)
+                        s_dy = float(dy)
+                        s_prev_dx = s_dx
+                        s_prev_dy = s_dy
+
                     left_pressed = bool(buttons & 0x01)
                     right_pressed = bool(buttons & 0x02)
 
                     if args.dry_run:
                         print(
                             f"[PACKET] dx: {dx:+4d} | dy: {dy:+4d} | "
+                            f"s_dx: {s_dx:+6.2f} | s_dy: {s_dy:+6.2f} | "
                             f"Left: {'DOWN' if left_pressed else ' UP '} | "
                             f"Right: {'DOWN' if right_pressed else ' UP '}"
                         )
                     else:
-                        # Move cursor only when dx or dy is non-zero
-                        if dx != 0 or dy != 0:
-                            pyautogui.moveRel(dx * args.scale, dy * args.scale)
+                        if args.smooth > 0:
+                            # Apply scale and accumulate fractional remainders
+                            total_x = s_dx * args.scale + rem_x
+                            total_y = s_dy * args.scale + rem_y
+
+                            step_x = int(total_x)
+                            step_y = int(total_y)
+
+                            rem_x = total_x - float(step_x)
+                            rem_y = total_y - float(step_y)
+
+                            if step_x != 0 or step_y != 0:
+                                pyautogui.moveRel(step_x, step_y)
+                        else:
+                            # With --smooth 0, behaviour is identical to original firmware
+                            if dx != 0 or dy != 0:
+                                pyautogui.moveRel(dx * args.scale, dy * args.scale)
 
                         # Left button edge detection
                         if left_pressed and not left_down:
